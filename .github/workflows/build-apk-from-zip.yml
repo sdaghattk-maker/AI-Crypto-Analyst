@@ -1,9 +1,7 @@
-
 name: Build AI Crypto Analyst APK
 
 on:
   workflow_dispatch:
-
   push:
     paths:
       - 'AI-Crypto-Analyst-Binance.zip'
@@ -35,8 +33,8 @@ jobs:
 
       - name: Check ZIP file
         run: |
-          ls -lah
           test -f AI-Crypto-Analyst-Binance.zip
+          unzip -t AI-Crypto-Analyst-Binance.zip
 
       - name: Extract Flutter project
         run: |
@@ -52,8 +50,7 @@ jobs:
 
       - name: Remove default template test
         working-directory: extracted/AI-Crypto-Analyst
-        run: |
-          rm -f test/widget_test.dart
+        run: rm -f test/widget_test.dart
 
       - name: Get dependencies
         working-directory: extracted/AI-Crypto-Analyst
@@ -63,7 +60,7 @@ jobs:
         working-directory: extracted/AI-Crypto-Analyst
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Build release APK
+      - name: Build release APK without broken Lint task
         working-directory: extracted/AI-Crypto-Analyst/android
         run: |
           chmod +x gradlew
@@ -73,24 +70,27 @@ jobs:
             -x lintVitalRelease \
             --no-daemon
 
-      - name: Find and prepare APK
+      - name: Locate and stage release APK
+        shell: bash
         run: |
-          echo "Searching for generated APK..."
-          find extracted/AI-Crypto-Analyst/android/app/build/outputs \
-            -type f -name "*.apk" -print
+          set -euo pipefail
+          PROJECT="extracted/AI-Crypto-Analyst"
+          echo "Searching all build output folders for release APKs..."
+          find "$PROJECT" -type f -name '*.apk' -print | sort
 
-          APK=$(find extracted/AI-Crypto-Analyst/android/app/build/outputs \
-            -type f -name "*.apk" | head -n 1)
+          APK="$(find "$PROJECT" -type f -name '*.apk' \
+            \( -name '*release*.apk' -o -path '*/flutter-apk/*.apk' \) \
+            -print -quit)"
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: No APK file found"
+          if [[ -z "$APK" ]]; then
+            echo "ERROR: Release APK was not found. Full APK search results:"
+            find "$PROJECT" -type f -name '*.apk' -print
             exit 1
           fi
 
           mkdir -p artifacts
           cp "$APK" artifacts/AI-Crypto-Analyst.apk
-
-          echo "APK prepared successfully:"
+          echo "Selected APK: $APK"
           ls -lh artifacts/AI-Crypto-Analyst.apk
 
       - name: Upload APK artifact
