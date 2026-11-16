@@ -35,7 +35,6 @@ jobs:
 
       - name: Check ZIP file
         run: |
-          echo "Checking project ZIP..."
           ls -lah
           test -f AI-Crypto-Analyst-Binance.zip
 
@@ -64,7 +63,7 @@ jobs:
         working-directory: extracted/AI-Crypto-Analyst
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Build release APK without broken Lint task
+      - name: Build release APK
         working-directory: extracted/AI-Crypto-Analyst/android
         run: |
           chmod +x gradlew
@@ -74,16 +73,30 @@ jobs:
             -x lintVitalRelease \
             --no-daemon
 
-      - name: Verify APK
+      - name: Find and prepare APK
         run: |
-          APK="extracted/AI-Crypto-Analyst/android/app/build/outputs/apk/release/app-release.apk"
-          test -f "$APK"
-          ls -lh "$APK"
+          echo "Searching for generated APK..."
+          find extracted/AI-Crypto-Analyst/android/app/build/outputs \
+            -type f -name "*.apk" -print
+
+          APK=$(find extracted/AI-Crypto-Analyst/android/app/build/outputs \
+            -type f -name "*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK file found"
+            exit 1
+          fi
+
+          mkdir -p artifacts
+          cp "$APK" artifacts/AI-Crypto-Analyst.apk
+
+          echo "APK prepared successfully:"
+          ls -lh artifacts/AI-Crypto-Analyst.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: AI-Crypto-Analyst-APK
-          path: extracted/AI-Crypto-Analyst/android/app/build/outputs/apk/release/app-release.apk
+          path: artifacts/AI-Crypto-Analyst.apk
           if-no-files-found: error
           retention-days: 14
