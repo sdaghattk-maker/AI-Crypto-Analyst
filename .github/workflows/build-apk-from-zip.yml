@@ -1,0 +1,53 @@
+name: Build AI Crypto Analyst APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'AI-Crypto-Analyst-Binance.zip'
+      - '.github/workflows/build-apk-from-zip.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Extract Flutter project
+        run: |
+          unzip -o AI-Crypto-Analyst-Binance.zip -d extracted
+          test -f extracted/AI-Crypto-Analyst/pubspec.yaml
+      - name: Generate Android platform files
+        working-directory: extracted/AI-Crypto-Analyst
+        run: |
+          rm -rf android
+          flutter create --platforms=android --project-name ai_crypto_analyst .
+      - name: Get dependencies
+        working-directory: extracted/AI-Crypto-Analyst
+        run: flutter pub get
+      - name: Analyze project
+        working-directory: extracted/AI-Crypto-Analyst
+        run: flutter analyze
+      - name: Build release APK
+        working-directory: extracted/AI-Crypto-Analyst
+        run: flutter build apk --release
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Crypto-Analyst-APK
+          path: extracted/AI-Crypto-Analyst/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
