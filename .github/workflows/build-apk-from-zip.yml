@@ -34,16 +34,33 @@ jobs:
 
       - name: Check ZIP file
         run: |
-          set -e
+          set -euo pipefail
           test -f AI-Crypto-Analyst-Binance.zip
           unzip -t AI-Crypto-Analyst-Binance.zip
 
       - name: Extract Flutter project
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          rm -rf extracted
           mkdir -p extracted
           unzip -o AI-Crypto-Analyst-Binance.zip -d extracted
-          test -f extracted/AI-Crypto-Analyst/pubspec.yaml
+
+          if [[ -f extracted/pubspec.yaml ]]; then
+            echo "Detected flat ZIP layout; normalizing project directory."
+            mkdir -p extracted/AI-Crypto-Analyst
+            find extracted -mindepth 1 -maxdepth 1 \
+              ! -name AI-Crypto-Analyst -exec mv -t extracted/AI-Crypto-Analyst -- {} +
+          fi
+
+          if [[ ! -f extracted/AI-Crypto-Analyst/pubspec.yaml ]]; then
+            echo "ERROR: pubspec.yaml not found."
+            find extracted -maxdepth 2 -type f | sort | head -200
+            exit 1
+          fi
+
+          echo "Flutter project located successfully."
+          ls -la extracted/AI-Crypto-Analyst | head -80
 
       - name: Generate Android platform files
         working-directory: extracted/AI-Crypto-Analyst
@@ -57,7 +74,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           MANIFEST="android/app/src/main/AndroidManifest.xml"
 
           if [[ ! -f "$MANIFEST" ]]; then
@@ -70,12 +86,10 @@ jobs:
 
           manifest = Path("android/app/src/main/AndroidManifest.xml")
           content = manifest.read_text(encoding="utf-8")
-
-          permission = 'android.permission.INTERNET'
+          permission = "android.permission.INTERNET"
 
           if permission not in content:
-              marker = '<application'
-
+              marker = "<application"
               if marker not in content:
                   raise SystemExit("ERROR: <application> tag not found")
 
@@ -84,7 +98,6 @@ jobs:
                   '    <uses-permission android:name="android.permission.INTERNET"/>\n\n    ' + marker,
                   1
               )
-
               manifest.write_text(content, encoding="utf-8")
               print("INTERNET permission added.")
           else:
@@ -124,7 +137,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           PROJECT="extracted/AI-Crypto-Analyst"
 
           echo "Searching for release APK..."
@@ -148,20 +160,17 @@ jobs:
           fi
 
           echo "Checking permissions inside final APK..."
-
           "$AAPT" dump permissions "$APK" | tee permissions.txt
 
           if ! grep -Fq "android.permission.INTERNET" permissions.txt; then
-            echo "ERROR: INTERNET permission is missing from final APK"
+            echo "ERROR: INTERNET permission is missing"
             exit 1
           fi
 
-          echo "SUCCESS: INTERNET permission exists in final APK."
+          echo "SUCCESS: INTERNET permission exists."
 
           mkdir -p artifacts
           cp "$APK" artifacts/AI-Crypto-Analyst.apk
-
-          echo "Selected APK: $APK"
           ls -lh artifacts/AI-Crypto-Analyst.apk
 
       - name: Upload APK artifact
