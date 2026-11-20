@@ -14,7 +14,7 @@ jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -36,57 +36,44 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE="$GITHUB_WORKSPACE/AI-Crypto-Analyst-Binance.zip"
-          if [[ ! -f "$ZIP_FILE" ]]; then
+          test -f AI-Crypto-Analyst-Binance.zip || {
             echo "ERROR: AI-Crypto-Analyst-Binance.zip is missing from the repository root."
             exit 1
-          fi
-          unzip -t "$ZIP_FILE"
+          }
+          unzip -t AI-Crypto-Analyst-Binance.zip
 
       - name: Extract Flutter project and detect its real root
         id: locate_project
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$GITHUB_WORKSPACE/extracted"
-          mkdir -p "$GITHUB_WORKSPACE/extracted"
-          unzip -q "$GITHUB_WORKSPACE/AI-Crypto-Analyst-Binance.zip" -d "$GITHUB_WORKSPACE/extracted"
-
-          mapfile -t PUBSPECS < <(find "$GITHUB_WORKSPACE/extracted" -type f -name pubspec.yaml \
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -q AI-Crypto-Analyst-Binance.zip -d extracted
+          mapfile -t PUBSPECS < <(find extracted -type f -name pubspec.yaml \
             -not -path '*/.dart_tool/*' -not -path '*/build/*' | sort)
-
-          if [[ ${#PUBSPECS[@]} -eq 0 ]]; then
-            echo "ERROR: No pubspec.yaml was found in the ZIP archive."
-            find "$GITHUB_WORKSPACE/extracted" -maxdepth 5 -type f | sort | head -250
-            exit 1
-          fi
           if [[ ${#PUBSPECS[@]} -ne 1 ]]; then
-            echo "ERROR: Expected exactly one Flutter project, found ${#PUBSPECS[@]}."
-            printf '%s\n' "${PUBSPECS[@]}"
+            echo "ERROR: Expected exactly one Flutter project; found ${#PUBSPECS[@]}"
+            printf '%s\n' "${PUBSPECS[@]:-<none>}"
+            find extracted -maxdepth 5 -type f | sort | head -250
             exit 1
           fi
-
-          PROJECT_DIR="$(dirname "${PUBSPECS[0]}")"
-          PROJECT_DIR="$(realpath "$PROJECT_DIR")"
-          echo "Flutter project root: $PROJECT_DIR"
+          PROJECT_DIR="$(realpath "$(dirname "${PUBSPECS[0]}")")"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          test -f "$PROJECT_DIR/pubspec.yaml"
+          echo "Flutter project root: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR" | head -80
 
-      - name: Prepare Android platform (preserve existing configuration)
+      - name: Prepare Android platform only when missing
         working-directory: ${{ steps.locate_project.outputs.project_dir }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! -f android/gradlew || ! -f android/app/build.gradle && ! -f android/app/build.gradle.kts ]]; then
-            echo "Android platform is missing or incomplete; generating it."
-            if [[ -d android ]]; then
-              mv android "android.backup.$(date +%s)"
-            fi
+          if [[ ! -f android/gradlew || ! -f android/app/src/main/AndroidManifest.xml ]]; then
+            echo "Android platform files are incomplete; generating the Android platform."
             flutter create --platforms=android --project-name ai_crypto_analyst .
           else
-            echo "Existing Android platform detected; preserving its configuration."
+            echo "Existing Android platform detected; preserving project configuration."
           fi
-          test -f android/app/src/main/AndroidManifest.xml
 
       - name: Ensure INTERNET permission
         working-directory: ${{ steps.locate_project.outputs.project_dir }}
@@ -94,24 +81,23 @@ jobs:
         run: |
           set -euo pipefail
           MANIFEST="android/app/src/main/AndroidManifest.xml"
+          test -f "$MANIFEST" || { echo "ERROR: $MANIFEST not found"; exit 1; }
           python3 - <<'PY'
           from pathlib import Path
           import re
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
-          content = manifest.read_text(encoding="utf-8")
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          text = path.read_text(encoding="utf-8")
           permission = 'android.permission.INTERNET'
-          if permission not in content:
-              match = re.search(r'<manifest\b[^>]*>', content)
+          if permission not in text:
+              match = re.search(r'<manifest\b[^>]*>', text)
               if not match:
-                  raise SystemExit("ERROR: <manifest> opening tag not found")
-              insertion = '\n    <uses-permission android:name="android.permission.INTERNET" />'
-              content = content[:match.end()] + insertion + content[match.end():]
-              manifest.write_text(content, encoding="utf-8")
-          if permission not in manifest.read_text(encoding="utf-8"):
+                  raise SystemExit("ERROR: <manifest> root tag not found")
+              text = text[:match.end()] + '\n    <uses-permission android:name="android.permission.INTERNET" />' + text[match.end():]
+              path.write_text(text, encoding="utf-8")
+          if permission not in path.read_text(encoding="utf-8"):
               raise SystemExit("ERROR: INTERNET permission verification failed")
-          print("INTERNET permission verified.")
+          print("INTERNET permission verified in manifest.")
           PY
-          cat "$MANIFEST"
 
       - name: Remove default template test
         working-directory: ${{ steps.locate_project.outputs.project_dir }}
@@ -123,70 +109,78 @@ jobs:
         shell: bash
         run: flutter pub get
 
-      # Analyzer diagnostics are retained for review, but the Android compiler
-      # remains the hard gate. Real Dart compilation failures still fail Gradle.
-      - name: Analyze project (diagnostic; compiler is the build gate)
-        id: analyze
+      - name: Analyze project (warnings and infos are non-fatal)
         working-directory: ${{ steps.locate_project.outputs.project_dir }}
         shell: bash
         run: |
-          set +e
-          flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings 2>&1 | tee "$GITHUB_WORKSPACE/analyze.log"
-          ANALYZE_STATUS=${PIPESTATUS[0]}
-          set -e
-          echo "analyze_exit_code=$ANALYZE_STATUS" >> "$GITHUB_OUTPUT"
-          if [[ "$ANALYZE_STATUS" -eq 0 ]]; then
-            echo "Flutter analyzer completed without fatal diagnostics."
-          else
-            echo "::warning::flutter analyze returned exit code $ANALYZE_STATUS. See analyze.log; APK compilation will determine whether errors block the build."
+          set -uo pipefail
+          flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings 2>&1 | tee "$GITHUB_WORKSPACE/flutter-analyze.log"
+          status=${PIPESTATUS[0]}
+          if [[ $status -ne 0 ]]; then
+            echo "ERROR: Flutter analyzer failed (exit $status). See flutter-analyze.log artifact."
+            exit "$status"
           fi
 
-      - name: Build release APK
+      - name: Build release APK with full Gradle diagnostics
+        id: gradle_build
         working-directory: ${{ steps.locate_project.outputs.project_dir }}/android
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           chmod +x gradlew
           ./gradlew :app:assembleRelease \
-            -x lintVitalAnalyzeRelease \
-            -x lintVitalReportRelease \
-            -x lintVitalRelease \
             --no-daemon \
-            --stacktrace
+            --console=plain \
+            --stacktrace \
+            --warning-mode all \
+            2>&1 | tee "$GITHUB_WORKSPACE/gradle-build.log"
+          status=${PIPESTATUS[0]}
+          if [[ $status -ne 0 ]]; then
+            echo "ERROR: Gradle assembleRelease failed (exit $status). Key failure context:"
+            grep -n -A 12 -B 5 -E '^\* What went wrong:|^Execution failed for task|^Caused by:|^FAILURE:' "$GITHUB_WORKSPACE/gradle-build.log" | tail -160 || true
+            exit "$status"
+          fi
 
       - name: Locate and verify release APK
-        id: verify_apk
+        if: success()
+        working-directory: ${{ steps.locate_project.outputs.project_dir }}
         shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.locate_project.outputs.project_dir }}
         run: |
           set -euo pipefail
-          mapfile -t APKS < <(find "$PROJECT_DIR" -type f -path '*/outputs/apk/*/*.apk' -print | sort)
-          if [[ ${#APKS[@]} -eq 0 ]]; then
-            echo "ERROR: No APK found under outputs/apk."
-            find "$PROJECT_DIR" -type f -name '*.apk' -print | sort
+          APK="$(find build/app/outputs -type f -name '*.apk' -print -quit 2>/dev/null || true)"
+          if [[ -z "$APK" ]]; then
+            APK="$(find android/app/build/outputs -type f -name '*.apk' -print -quit 2>/dev/null || true)"
+          fi
+          if [[ -z "$APK" ]]; then
+            echo "ERROR: No release APK found in expected Flutter/Gradle output directories."
+            find . -type f -name '*.apk' -print || true
             exit 1
           fi
-          APK=""
-          for candidate in "${APKS[@]}"; do
-            if [[ "$candidate" == *"/release/"* ]]; then APK="$candidate"; break; fi
-          done
-          if [[ -z "$APK" ]]; then APK="${APKS[0]}"; fi
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          AAPT="$(find "$SDK_ROOT/build-tools" -type f -name aapt -print 2>/dev/null | sort -V | tail -n 1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt -o -name aapt2 2>/dev/null | sort -V | tail -n 1)"
           if [[ -z "$AAPT" ]]; then
-            echo "ERROR: aapt tool was not found under $SDK_ROOT/build-tools"
+            echo "ERROR: aapt/aapt2 was not found."
             exit 1
           fi
-          "$AAPT" dump permissions "$APK" | tee "$GITHUB_WORKSPACE/permissions.txt"
-          grep -Fq 'android.permission.INTERNET' "$GITHUB_WORKSPACE/permissions.txt" || {
-            echo "ERROR: INTERNET permission is missing from final APK"
+          "$AAPT" dump permissions "$APK" | tee "$GITHUB_WORKSPACE/apk-permissions.txt"
+          grep -Fq 'android.permission.INTERNET' "$GITHUB_WORKSPACE/apk-permissions.txt" || {
+            echo "ERROR: INTERNET permission missing from final APK"
             exit 1
           }
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
           cp "$APK" "$GITHUB_WORKSPACE/artifacts/AI-Crypto-Analyst.apk"
           ls -lh "$GITHUB_WORKSPACE/artifacts/AI-Crypto-Analyst.apk"
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Crypto-Analyst-Build-Diagnostics
+          path: |
+            gradle-build.log
+            flutter-analyze.log
+            apk-permissions.txt
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload APK artifact
         if: success()
@@ -195,15 +189,4 @@ jobs:
           name: AI-Crypto-Analyst-APK
           path: artifacts/AI-Crypto-Analyst.apk
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload build diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: AI-Crypto-Analyst-Build-Diagnostics
-          path: |
-            analyze.log
-            permissions.txt
-          if-no-files-found: ignore
           retention-days: 14
