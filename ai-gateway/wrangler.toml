@@ -1,0 +1,20 @@
+name = "hrs-ai-crypto-gateway"
+main = "worker.js"
+compatibility_date = "2025-11-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "PROVIDER_CIRCUIT_BREAKER"
+class_name = "ProviderCircuitBreaker"
+
+[[migrations]]
+tag = "v1-provider-circuit-breaker"
+new_sqlite_classes = ["ProviderCircuitBreaker"]
+
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+[ratelimits.simple]
+limit = 5
+period = 60
