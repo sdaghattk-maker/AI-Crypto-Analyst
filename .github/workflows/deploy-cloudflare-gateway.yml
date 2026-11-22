@@ -1,0 +1,67 @@
+name: Deploy Cloudflare Gateway (manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_worker:
+        description: Type the exact Worker name
+        required: true
+        type: string
+      confirm_rate_limit_namespace:
+        description: Confirm the existing RATE_LIMITER namespace ID is 1001
+        required: true
+        type: string
+      deploy_confirmation:
+        description: Type DEPLOY-HRS-AI-GATEWAY to authorize deployment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-gateway-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ inputs.confirm_worker == 'hrs-ai-crypto-gateway' && inputs.confirm_rate_limit_namespace == '1001' && inputs.deploy_confirmation == 'DEPLOY-HRS-AI-GATEWAY' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-gateway
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Verify deployment inputs and files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_worker }}" = "hrs-ai-crypto-gateway"
+          test "${{ inputs.confirm_rate_limit_namespace }}" = "1001"
+          test "${{ inputs.deploy_confirmation }}" = "DEPLOY-HRS-AI-GATEWAY"
+          grep -Fq 'name = "hrs-ai-crypto-gateway"' wrangler.toml
+          grep -Fq 'name = "PROVIDER_CIRCUIT_BREAKER"' wrangler.toml
+          grep -Fq 'class_name = "ProviderCircuitBreaker"' wrangler.toml
+          grep -Fq 'new_sqlite_classes = ["ProviderCircuitBreaker"]' wrangler.toml
+          grep -Fq 'namespace_id = "1001"' wrangler.toml
+          grep -Fq 'export class ProviderCircuitBreaker' worker.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Wrangler
+        run: npm install --global wrangler@4
+      - name: Authenticate and verify account
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          wrangler whoami
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler deploy --config wrangler.toml --keep-vars
